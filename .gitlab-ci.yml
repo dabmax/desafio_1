@@ -1,0 +1,47 @@
+variables:
+  REPO_HOST: "repo.nexus.local"
+  $CLUSTER_DOCKER_HOMOL: "10.16.1.10"
+  $CLUSTER_DOCKER_PROD: "10.16.0.10"
+
+stages:
+  - build
+  - deploy-homolog
+  - deploy-production
+
+Build:
+  stage: build
+  image: docker:latest
+  script:
+    - docker login -u $REGISTRY_USERNAME -p $REGISTRY_PASSWORD $REGISTRY_HOST
+    - docker build -t $REGISTRY_HOST/$CI_PROJECT_PATH:$CI_COMMIT_REF_NAME .
+    - if [[ $CI_COMMIT_REF_NAME == 'master' ]]; then docker build -t $REPO_HOST/$CI_PROJECT_PATH:latest .;fi
+    - if [[ $CI_COMMIT_REF_NAME == 'master' ]]; then docker push $REPO_HOST/$CI_PROJECT_PATH:latest;fi
+    - docker push $REGISTRY_HOST/$CI_PROJECT_PATH:$CI_COMMIT_REF_NAME
+  only:
+    - homolog
+    - master
+
+deploy homolog:
+  stage: deploy-homolog
+  image: docker:latest
+  script:
+    - export SSHPASS=$USER_PASS
+    - sshpass -e ssh -o stricthostkeychecking=no root@$CLUSTER_DOCKER_HOMOL docker login -u $REPO_USERNAME -p $REPO_PASSWORD $REPO_HOST
+    - sshpass -e ssh -o stricthostkeychecking=no root@$CLUSTER_DOCKER_HOMOL docker pull $REPO_HOST/$CI_PROJECT_PATH:$CI_COMMIT_REF_NAME
+    - sshpass -e ssh -o stricthostkeychecking=no root@$CLUSTER_DOCKER_HOMOL docker service create --name=nadejs_$CI_COMMIT $REPO_HOST/$CI_PROJECT_PATH:$CI_COMMIT_REF_NAME --publish published:3000 target=3000
+  only:
+    - homolog
+
+deploy production:
+  stage: deploy-production
+  image: docker:latest
+  script:
+    - export SSHPASS=$USER_PASS
+    - sshpass -e ssh -o stricthostkeychecking=no root@$CLUSTER_DOCKER_PROD docker login -u $REPO_USERNAME -p $REPO_PASSWORD $REPO_HOST
+    - sshpass -e ssh -o stricthostkeychecking=no root@$CLUSTER_DOCKER_PROD docker pull $REPO_HOST/$CI_PROJECT_PATH:$CI_COMMIT_REF_NAME
+    - sshpass -e ssh -o stricthostkeychecking=no root@$CLUSTER_DOCKER_PROD docker service create --name=nadejs_$CI_COMMIT $REPO_HOST/$CI_PROJECT_PATH:$CI_COMMIT_REF_NAME --publish published:3000 target=3000 
+  environment:
+    name: review/$CI_COMMIT_REF_NAME
+  when: manual
+  only:
+    - master
